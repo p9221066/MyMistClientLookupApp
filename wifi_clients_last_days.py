@@ -12,6 +12,9 @@ import argparse
 import csv
 import json
 import os
+import re
+import sys
+import time
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -92,15 +95,74 @@ def prompt_for_days() -> int:
             print(f"Enter a whole number from 1 to {MAX_DAYS}.")
 
 
-def run_search(search: Any, apisession: Any, org_id: str, days: int, label: str) -> list[Mapping[str, Any]]:
-    response = search(apisession, org_id, duration=f"{days}d", limit=PAGE_SIZE)
+class Progress:
+    """One-line progress display on stderr. In a terminal it redraws in place as a bar;
+    when output is redirected to a file or log, it prints a line every 10 pages instead."""
+
+    BAR_WIDTH = 30
+
+    def __init__(self, label: str, total: int | None) -> None:
+        self.label, self.total = label, total or None
+        self.start = time.monotonic()
+        self.interactive = sys.stderr.isatty()
+        self.pages = 0
+
+    def update(self, fetched: int) -> None:
+        self.pages += 1
+        if not self.interactive and self.pages % 10:
+            return
+        elapsed = time.monotonic() - self.start
+        if self.total:
+            share = min(fetched / self.total, 1.0)
+            filled = int(share * self.BAR_WIDTH)
+            bar = "#" * filled + "-" * (self.BAR_WIDTH - filled)
+            text = f"{self.label}: [{bar}] {share:4.0%}  {fetched:,}/{self.total:,}  {elapsed:.0f}s"
+        else:
+            text = f"{self.label}: {fetched:,} fetched  {elapsed:.0f}s"
+        if self.interactive:
+            sys.stderr.write("\r" + text.ljust(100)[:100])
+        else:
+            sys.stderr.write(text + "\n")
+        sys.stderr.flush()
+
+    def done(self, fetched: int) -> None:
+        elapsed = time.monotonic() - self.start
+        if self.interactive:
+            sys.stderr.write("\r" + " " * 100 + "\r")
+        sys.stderr.write(f"{self.label}: {fetched:,} records in {elapsed:.1f}s\n")
+        sys.stderr.flush()
+
+
+def page_results(response: Any, label: str) -> list[Mapping[str, Any]]:
     if response.status_code != 200:
         raise SystemExit(f"Mist API error ({label}): HTTP {response.status_code} {response.data}")
-    results = mistapi.get_all(apisession, response)
-    if isinstance(results, Mapping):
-        results = results.get("results")
+    data = response.data
+    results = data.get("results") if isinstance(data, Mapping) else data
     if not isinstance(results, list) or not all(isinstance(r, Mapping) for r in results):
         raise TypeError(f"MistAPI returned an unexpected {label} response.")
+    return results
+
+
+def run_search(search: Any, apisession: Any, org_id: str, days: int, label: str) -> list[Mapping[str, Any]]:
+    """Fetch every page of a Mist search, showing progress as pages arrive."""
+    response = search(apisession, org_id, duration=f"{days}d", limit=PAGE_SIZE)
+    results = list(page_results(response, label))
+    total = response.data.get("total") if isinstance(response.data, Mapping) else None
+    progress = Progress(f"Fetching {label}", total if isinstance(total, int) else None)
+    progress.update(len(results))
+
+    while response.next:
+        next_response = mistapi.get_next(apisession, response)
+        if next_response is None:
+            raise SystemExit(f"Mist API error ({label}): failed to fetch the next page.")
+        response = next_response
+        page = page_results(response, label)
+        if not page:
+            break
+        results.extend(page)
+        progress.update(len(results))
+
+    progress.done(len(results))
     return results
 
 
@@ -171,6 +233,20 @@ def fetch_clients(apisession: Any, org_id: str, days: int, client_type: str) -> 
     return rows
 
 
+def get_org_name(apisession: Any, org_id: str) -> str | None:
+    response = mistapi.api.v1.orgs.orgs.getOrg(apisession, org_id)
+    if response.status_code == 200 and isinstance(response.data, Mapping):
+        return response.data.get("name")
+    return None
+
+
+def filename_safe(text: str) -> str:
+    """Make an org name usable in a filename on any OS: spaces become '-', and
+    characters Windows forbids (\\ / : * ? " < > |) are dropped."""
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", text).strip().strip(".")
+    return re.sub(r"\s+", "-", cleaned)[:60] or "org"
+
+
 def export_clients(clients: list[dict[str, Any]], output_path: Path) -> None:
     leading = ["client_type", "mac", "last_seen", "source"]
     fieldnames = list(dict.fromkeys(leading + [key for client in clients for key in client]))
@@ -221,7 +297,8 @@ def main() -> None:
         return
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = args.output or Path.cwd() / f"{args.type}_clients_last_{days}_days_{timestamp}.csv"
+    org_label = filename_safe(get_org_name(apisession, org_id) or org_id)
+    output_path = args.output or Path.cwd() / f"{org_label}_{args.type}_clients_last_{days}_days_{timestamp}.csv"
     export_clients(clients, output_path)
     print(f"Exported {len(clients)} clients to {output_path.resolve()}")
 

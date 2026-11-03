@@ -48,7 +48,7 @@ py wifi_clients_last_days.py -d 3 --type all --org-id <org_id> -e .env -o client
 
 `--org-id` without `--login` must not prompt, so it needs either a token or both
 `MIST_USER` and `MIST_PASSWORD`; if neither is set the script exits with an error.
-| `-o`, `--output` | CSV path; default is auto-named with type, days and timestamp |
+| `-o`, `--output` | CSV path; default is auto-named with org name, type, days and timestamp, e.g. `Acme-Corp_wireless_clients_last_7_days_20261103_185301.csv` |
 
 ### Fully non-interactive (API token + org ID)
 
@@ -75,6 +75,17 @@ seen in about the last 7–8 days. To cover longer ranges, the script works like
   search is still needed for devices connected right now.
 - **Wired:** Mist has no wired session history, so wired results cover about 7–8
   days whatever `--days` is set to. The script prints a note when this applies.
+
+## Progress display
+
+Results are fetched 1,000 at a time. In a terminal, each search shows a live bar:
+
+```
+Fetching wireless sessions: [#############-----------------]  44%  2,000/4,500  12s
+```
+
+When output is redirected to a file or log, a progress line is printed every 10
+pages instead. Progress goes to stderr, so it never mixes into piped output.
 
 ## CSV contents
 
