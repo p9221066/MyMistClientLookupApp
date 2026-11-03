@@ -5,6 +5,7 @@ Examples:
     py wifi_clients_last_days.py --days 30            # wireless: up to 30 days
     py wifi_clients_last_days.py -d 3 --type all --org-id <org_id> -o clients.csv
     py wifi_clients_last_days.py -d 7 --org-id <org_id> --token <api_token>   # no prompts
+    py wifi_clients_last_days.py --login              # email/password login, lists all your orgs
 """
 
 import argparse
@@ -68,8 +69,13 @@ def parse_args() -> argparse.Namespace:
         help="Mist API token; skips interactive login (default: MIST_APITOKEN env var)",
     )
     parser.add_argument(
-        "--host", default=os.environ.get("MIST_HOST", "api.mist.com"),
-        help="Mist API host, e.g. api.mist.com, api.eu.mist.com (default: MIST_HOST env var or api.mist.com)",
+        "--host", default=os.environ.get("MIST_HOST"),
+        help="Mist API host, e.g. api.mist.com, api.eu.mist.com (default: MIST_HOST env var; "
+             "api.mist.com for token auth)",
+    )
+    parser.add_argument(
+        "--login", action="store_true",
+        help="ignore any API token and log in with email/password, so every org on your account is listed",
     )
     parser.add_argument("-o", "--output", type=Path, help="CSV output path (default: auto-named in current folder)")
     return parser.parse_args()
@@ -182,19 +188,25 @@ def main() -> None:
     args = parse_args()
     days = args.days or prompt_for_days()
 
-    if args.token:
+    if args.token and not args.login:
         # Token auth (from --token, MIST_APITOKEN, or .env): no email/password prompt.
-        apisession = mistapi.APISession(apitoken=args.token, host=args.host)
-    elif args.org_id:
-        raise SystemExit(
-            "--org-id needs an API token to run without prompts. Provide --token, set "
-            "MIST_APITOKEN, or put MIST_APITOKEN in a .env file (current or script folder)."
-        )
+        apisession = mistapi.APISession(apitoken=args.token, host=args.host or "api.mist.com")
     else:
-        apisession = mistapi.APISession()  # interactive login
+        # Email/password login. mistapi also reads MIST_APITOKEN from the environment,
+        # so drop it here or it would silently log in with the token instead.
+        os.environ.pop("MIST_APITOKEN", None)
+        has_credentials = bool(os.environ.get("MIST_USER") and os.environ.get("MIST_PASSWORD"))
+        if args.org_id and not args.login and not has_credentials:
+            raise SystemExit(
+                "--org-id runs without prompts, so it needs credentials up front: an API token "
+                "(--token or MIST_APITOKEN) or MIST_USER + MIST_PASSWORD, in the environment or "
+                "a .env file. Add --login to be prompted instead."
+            )
+        # Uses MIST_USER / MIST_PASSWORD when set; prompts for anything missing (including 2FA).
+        apisession = mistapi.APISession(host=args.host)
     apisession.login()
     if not apisession.get_authentication_status():
-        raise SystemExit("Mist authentication failed. Check the API token and host.")
+        raise SystemExit("Mist authentication failed. Check the API token or credentials, and the host.")
     org_id = args.org_id or mistapi.cli.select_org(apisession)[0]
 
     types = ("wireless", "wired") if args.type == "all" else (args.type,)

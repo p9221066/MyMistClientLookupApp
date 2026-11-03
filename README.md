@@ -35,7 +35,19 @@ py wifi_clients_last_days.py -d 3 --type all --org-id <org_id> -e .env -o client
 | `--org-id` | Org ID; if omitted you pick from a list |
 | `-e`, `--env-file` | `.env` file with Mist credentials |
 | `--token` | Mist API token; skips email/password login (default: `MIST_APITOKEN` env var) |
-| `--host` | Mist API host, e.g. `api.eu.mist.com` (default: `MIST_HOST` env var or `api.mist.com`) |
+| `--host` | Mist API host, e.g. `api.eu.mist.com` (default: `MIST_HOST` env var; `api.mist.com` for token auth) |
+| `--login` | Ignore any API token and log in with email/password, so every org on your account is listed |
+
+### Which login is used
+
+1. `--login` given → email/password (uses `MIST_USER` / `MIST_PASSWORD` if set,
+   otherwise prompts; 2FA prompts if enabled).
+2. A token is found (`--token`, `MIST_APITOKEN`, or `.env`) → token login, no prompts.
+   An **org** API token only sees its own org, so the org list has one entry.
+3. Otherwise → email/password, as in 1.
+
+`--org-id` without `--login` must not prompt, so it needs either a token or both
+`MIST_USER` and `MIST_PASSWORD`; if neither is set the script exits with an error.
 | `-o`, `--output` | CSV path; default is auto-named with type, days and timestamp |
 
 ### Fully non-interactive (API token + org ID)
