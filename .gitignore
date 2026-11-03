@@ -1,0 +1,11 @@
+# Credentials - never commit
+.env
+*.env
+
+# Exported client data (contains client MACs/IPs)
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
